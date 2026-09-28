@@ -31,6 +31,15 @@ CHOOSABLE_SEAT_TYPES = frozenset({"Q", "M", "D", "O", "P", "9"})
 BERTH_SEAT_TYPES = frozenset({"3", "4", "6", "A", "F", "I", "J"})
 
 
+class PreferenceNotSatisfiable(ValueError):
+    """A strict position preference cannot be accepted by 12306 for this order.
+
+    Raised instead of silently degrading to system allocation when the caller
+    enabled strict (仅抢所选铺位) semantics.  Raised before the queue request,
+    so no order has been submitted yet and the task can stop safely.
+    """
+
+
 def _validate_passenger_count(passenger_count: int) -> None:
     if isinstance(passenger_count, bool) or not isinstance(passenger_count, int):
         raise ValueError("乘车人数必须是整数")
@@ -344,11 +353,15 @@ def build_order_preference_payload(
     seat_type: str,
     passenger_count: int,
     dw_flag: str = "",
+    berth_strict: bool = False,
 ) -> OrderPreferencePayload:
     """Resolve configured preferences against the current order capabilities.
 
     Unsupported or unknown runtime capabilities intentionally produce an empty
     preference payload while keeping the order eligible for normal allocation.
+    With ``berth_strict`` an applicable berth preference that 12306 cannot
+    accept raises :class:`PreferenceNotSatisfiable` instead of degrading, so
+    the caller can abandon the order before anything is submitted.
     Invalid counts and malformed configuration are still rejected earlier by the
     model validators instead of being sent to 12306.
     """
@@ -374,8 +387,12 @@ def build_order_preference_payload(
 
     if berth_preference.enabled and seat_type in BERTH_SEAT_TYPES:
         if not capabilities.can_choose_beds:
+            if berth_strict:
+                raise PreferenceNotSatisfiable(capabilities.berth_unavailable_message())
             warnings.append(capabilities.berth_unavailable_message() + "，已改为系统分配")
         elif berth_preference.middle and not capabilities.can_choose_middle:
+            if berth_strict:
+                raise PreferenceNotSatisfiable("当前列车/席别不支持中铺偏好")
             warnings.append("当前列车/席别不支持中铺偏好，已改为系统分配")
         else:
             seat_detail_type = berth_preference.to_seat_detail_type(

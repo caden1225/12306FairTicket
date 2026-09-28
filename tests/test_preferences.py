@@ -16,6 +16,7 @@ from ticket_app.preferences import (
     BerthPreference,
     OrderCapabilities,
     OrderPreferencePayload,
+    PreferenceNotSatisfiable,
     SeatRelationPreference,
     build_order_preference_payload,
     seat_layout_letters,
@@ -150,6 +151,44 @@ class PreferenceModelTests(unittest.TestCase):
         self.assertEqual(payload.seat_detail_type, "000")
         self.assertTrue(payload.warnings)
 
+    def test_strict_berth_raises_instead_of_falling_back(self):
+        berth = BerthPreference(lower=1, middle=1, upper=0)
+        denied = OrderCapabilities.from_mapping({"canChooseBeds": "N"})
+        with self.assertRaisesRegex(PreferenceNotSatisfiable, "未开放在线选铺"):
+            build_order_preference_payload(
+                SeatRelationPreference(), berth, denied, "3", 2, berth_strict=True
+            )
+
+        no_middle = OrderCapabilities.from_mapping(
+            {"canChooseBeds": "Y", "isCanChooseMid": "N"}
+        )
+        with self.assertRaisesRegex(PreferenceNotSatisfiable, "不支持中铺"):
+            build_order_preference_payload(
+                SeatRelationPreference(), berth, no_middle, "3", 2, berth_strict=True
+            )
+
+        supported = OrderCapabilities.from_mapping(
+            {"canChooseBeds": "Y", "isCanChooseMid": "Y"}
+        )
+        payload = build_order_preference_payload(
+            SeatRelationPreference(), berth, supported, "3", 2, berth_strict=True
+        )
+        self.assertEqual(payload.seat_detail_type, "110")
+        self.assertEqual(payload.warnings, ())
+
+    def test_strict_berth_stays_inactive_for_non_sleeper_or_disabled_preference(self):
+        denied = OrderCapabilities.from_mapping({"canChooseBeds": "N"})
+        payload = build_order_preference_payload(
+            SeatRelationPreference(), BerthPreference(lower=1), denied, "O", 1, berth_strict=True
+        )
+        self.assertEqual(payload.seat_detail_type, "000")
+        self.assertEqual(payload.warnings, ())
+        payload = build_order_preference_payload(
+            SeatRelationPreference(), BerthPreference(), denied, "3", 1, berth_strict=True
+        )
+        self.assertEqual(payload.seat_detail_type, "000")
+        self.assertEqual(payload.warnings, ())
+
     def test_preferences_are_inactive_when_candidate_seat_type_is_inapplicable(self):
         payload = build_order_preference_payload(
             SeatRelationPreference.from_value(["1A"]),
@@ -237,6 +276,22 @@ class AppConfigPreferenceTests(unittest.TestCase):
             )
         cfg = AppConfig.from_mapping(base_config_mapping(BERTH_PREFERENCE={"lower": 2}))
         self.assertEqual(cfg.berth_preference.lower, 2)
+
+    def test_berth_preference_strict_defaults_off_and_round_trips(self):
+        cfg = AppConfig.from_mapping(base_config_mapping())
+        self.assertFalse(cfg.berth_preference_strict)
+
+        cfg = AppConfig.from_mapping(
+            base_config_mapping(
+                SEAT_TYPES=["硬卧"],
+                BERTH_PREFERENCE={"lower": 1},
+                BERTH_PREFERENCE_STRICT=True,
+            )
+        )
+        self.assertTrue(cfg.berth_preference_strict)
+        round_tripped = AppConfig.from_mapping(cfg.to_mapping())
+        self.assertTrue(round_tripped.berth_preference_strict)
+        self.assertEqual(round_tripped.berth_preference, cfg.berth_preference)
 
 
 class RailwayClientPreferenceTests(unittest.TestCase):

@@ -8,13 +8,13 @@
 
 
 # 行程信息
-FROM_STATION = "开封北"
-TO_STATION = "北京西"
-TRAIN_DATE = "2026-05-05"  # YYYY-MM-DD
+FROM_STATION = "吉林"
+TO_STATION = "上海"
+TRAIN_DATE = "2026-10-11"  # YYYY-MM-DD
 
 
 # 乘车人。程序会登录后从 12306 常用乘车人中按姓名匹配，不需要在本地写身份证和手机号。
-PASSENGER_NAMES = ["XXX"]
+PASSENGER_NAMES = ["郑冬"]
 
 
 # 座席优先级，从左到右尝试。
@@ -64,6 +64,12 @@ SEAT_POSITION_PREFERENCES = []
 # 部分卧铺车型没有中铺，程序会依据 12306 实时返回的能力自动回退为系统分配。
 # 未选择卧铺席别时，已保存的数量保留但不启用。
 BERTH_PREFERENCE = {"lower": 0, "middle": 0, "upper": 0}
+
+# True: 仅抢所选铺位。下单前 12306 返回不支持选铺（或不支持中铺）时，
+# 程序放弃本次下单并直接结束任务，不再降级为系统随机分配。
+# 注意：12306 查票接口不提供铺位余票，即使开放选铺也不保证最终分到所选铺位，
+# 实际结果以订单详情为准。False（默认）保持原来的降级继续下单行为。
+BERTH_PREFERENCE_STRICT = False
 
 
 # 旧版兼容项。新配置请使用 SEAT_POSITION_PREFERENCES；只有上面的新项不存在时

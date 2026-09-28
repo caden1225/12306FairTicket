@@ -9,7 +9,7 @@ from .client import RailwayClient
 from .clock import ServerClock
 from .configuration import AppConfig, AppError, PreparedPassengerSet, ResponseFormatError, SEAT_SPECS, _elapsed_ms, _perf_log, _resolve_schedule_time
 from .helpers import _build_passenger_strings, _is_terminal_order_failure, _resolve_submit_seat_code, _stock_available
-from .preferences import OrderPreferencePayload, build_order_preference_payload
+from .preferences import OrderPreferencePayload, PreferenceNotSatisfiable, build_order_preference_payload
 from .runtime import CancellationToken, EventSink, RunCancelled, emit_event
 from .stations import StationStore
 from .configuration import SHARED_BERTH_CODES
@@ -315,14 +315,26 @@ class TicketRunner:
             logging.warning("订单信息校验失败: %s", check_result.message)
             return False
         preference_seat_type = "" if candidate["seat_label"] == "无座" else seat_type
-        preference_payload = build_order_preference_payload(
-            self.cfg.seat_relation_preference,
-            self.cfg.berth_preference,
-            check_result.capabilities,
-            preference_seat_type,
-            len(passengers.passengers),
-            str(ticket_info.get("dw_flag") or ""),
-        )
+        try:
+            preference_payload = build_order_preference_payload(
+                self.cfg.seat_relation_preference,
+                self.cfg.berth_preference,
+                check_result.capabilities,
+                preference_seat_type,
+                len(passengers.passengers),
+                str(ticket_info.get("dw_flag") or ""),
+                berth_strict=getattr(self.cfg, "berth_preference_strict", False),
+            )
+        except PreferenceNotSatisfiable as exc:
+            # Strict berth mode: the order is abandoned before queueing, so
+            # nothing has been reserved and the task can stop safely.
+            message = (
+                f"仅抢所选铺位：{ticket['station_train_code']} {candidate['seat_label']} "
+                f"{exc}，已放弃下单，任务结束"
+            )
+            logging.warning("%s", message)
+            emit_event(self.event_sink, "phase", message, phase="stopped")
+            raise AppError(message) from exc
         self._report_preference_payload(preference_payload)
         step_start = time.perf_counter()
         ok, queue_data = self.client.get_queue_count(ticket, ticket_info, seat_type, token)

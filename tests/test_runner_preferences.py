@@ -51,11 +51,12 @@ class FakeBookingClient:
         return self.wait_results[0]
 
 
-def make_runner(client, *, seat=None, berth=None, attempts=2):
+def make_runner(client, *, seat=None, berth=None, attempts=2, berth_strict=False):
     runner = object.__new__(TicketRunner)
     runner.cfg = SimpleNamespace(
         seat_relation_preference=seat or SeatRelationPreference(),
         berth_preference=berth or BerthPreference(),
+        berth_preference_strict=berth_strict,
         order_wait_attempts=attempts,
         order_wait_interval_seconds=0.001,
         perf_log=False,
@@ -170,6 +171,59 @@ def test_applicable_runtime_capability_denial_keeps_fallback_warning(label, code
     assert len(client.preference_payload.warnings) == 1
     assert expected_warning in client.preference_payload.warnings[0]
     assert any(event.kind == "preference_fallback" for event in runner.events)
+
+
+@pytest.mark.parametrize(("label", "code", "bed_status", "expected"), [
+    ("硬卧", "3", "N", "未开放在线选铺"),
+    ("软卧", "4", "Z", "人证核验"),
+    ("一等卧", "I", "N", "未开放在线选铺"),
+])
+def test_strict_berth_aborts_before_queue_when_capability_denied(label, code, bed_status, expected):
+    capabilities = OrderCapabilities.from_mapping({"canChooseBeds": bed_status})
+    client = FakeBookingClient(capabilities)
+    runner = make_runner(client, berth=BerthPreference(lower=2), berth_strict=True)
+
+    with pytest.raises(AppError, match="仅抢所选铺位") as exc_info:
+        runner._book_ticket(candidate(label, code), {code: passengers()})
+
+    assert expected in str(exc_info.value)
+    assert client.preference_payload is None  # confirm_single_for_queue never ran
+    assert any(
+        event.kind == "phase" and event.data.get("phase") == "stopped"
+        for event in runner.events
+    )
+
+
+def test_strict_berth_aborts_when_middle_berth_is_not_supported():
+    capabilities = OrderCapabilities.from_mapping(
+        {"canChooseBeds": "Y", "isCanChooseMid": "N"}
+    )
+    client = FakeBookingClient(capabilities)
+    runner = make_runner(client, berth=BerthPreference(middle=2), berth_strict=True)
+
+    with pytest.raises(AppError, match="不支持中铺"):
+        runner._book_ticket(candidate("硬卧", "3"), {"3": passengers()})
+    assert client.preference_payload is None
+
+
+def test_strict_berth_still_books_when_capability_is_available():
+    capabilities = OrderCapabilities.from_mapping(
+        {"canChooseBeds": "Y", "isCanChooseMid": "N"}
+    )
+    client = FakeBookingClient(capabilities)
+    runner = make_runner(client, berth=BerthPreference(lower=2), berth_strict=True)
+
+    assert runner._book_ticket(candidate("硬卧", "3"), {"3": passengers()}) is True
+    assert client.preference_payload.seat_detail_type == "200"
+    assert client.preference_payload.warnings == ()
+
+
+def test_strict_berth_ignores_non_sleeper_candidates():
+    client = FakeBookingClient(OrderCapabilities())
+    runner = make_runner(client, berth=BerthPreference(lower=2), berth_strict=True)
+
+    assert runner._book_ticket(candidate("二等座", "O"), {"O": passengers()}) is True
+    assert client.preference_payload.seat_detail_type == "000"
 
 
 def test_unknown_queue_result_stops_instead_of_trying_another_order():

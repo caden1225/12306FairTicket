@@ -448,7 +448,7 @@ class MainWindow(QMainWindow):
         seating.body.addWidget(self.order_preview)
         layout.addWidget(seating)
 
-        position = Card("座位与铺位偏好", "偏好只提交一次；若 12306 未开放或无法满足，订单仍保留并由系统分配其他位置。")
+        position = Card("座位与铺位偏好", "偏好只提交一次；若 12306 未开放或无法满足，默认由系统分配其他位置；铺位偏好可勾选“仅抢所选铺位”改为直接结束任务。")
         self.position_preferences = PositionPreferences()
         self.position_preferences.berths.select_seat_types_requested.connect(self._focus_sleeper_seats)
         position_block = self._field_block(
@@ -772,6 +772,7 @@ class MainWindow(QMainWindow):
             "auto_submit": self.auto_submit.isChecked(),
             "seat_position_preferences": self.position_preferences.seats.positions(),
             "berth_preference": self.position_preferences.berths.values(),
+            "berth_preference_strict": self.position_preferences.berths.strict(),
             "position_fallback": True,
             "persist_session": False,
             "purpose_codes": "ADULT",
@@ -835,6 +836,7 @@ class MainWindow(QMainWindow):
                 import_errors["seat_types"] = f"导入配置包含未知席别：{'、'.join(unknown_seats)}"
             self.position_preferences.seats.set_positions(values["seat_position_preferences"])
             self.position_preferences.berths.set_values(values["berth_preference"])
+            self.position_preferences.berths.set_strict(bool(values.get("berth_preference_strict", False)))
             for key, widget in self.advanced.items():
                 value = values.get(key, DEFAULT_VALUES.get(key))
                 if isinstance(widget, QDoubleSpinBox):
@@ -1008,13 +1010,19 @@ class MainWindow(QMainWindow):
 
         seat_positions = self.position_preferences.seats.positions()
         berths = self.position_preferences.berths.values()
+        berth_strict = self.position_preferences.berths.strict()
         codes = {SEAT_SPECS[label].submit_code for label in cfg.seat_types}
         position_parts = []
         if seat_positions and codes.intersection(SEATED_SEAT_TYPES):
             position_parts.append("座位关系 " + "/".join(seat_positions))
-        if sum(berths.values()) and codes.intersection(BERTH_SEAT_TYPES):
+        berth_active = sum(berths.values()) and codes.intersection(BERTH_SEAT_TYPES)
+        if berth_active:
             position_parts.append(f"下/中/上铺 {berths['lower']}/{berths['middle']}/{berths['upper']}")
         position_text = "；".join(position_parts) or "无启用的偏好"
+        if berth_active and berth_strict:
+            fallback_text = "仅抢所选铺位，12306 不支持时结束任务"
+        else:
+            fallback_text = "无法满足时自动分配"
         summary = (
             f"{cfg.from_station} → {cfg.to_station}   {cfg.train_date}\n"
             f"乘车人：{'、'.join(cfg.passenger_names) or '仅监控'}\n"
@@ -1023,7 +1031,7 @@ class MainWindow(QMainWindow):
             f"席别：{' → '.join(cfg.seat_types)}\n"
             f"策略：{'席别优先' if cfg.priority_strategy == 'seat_first' else '车次优先'}\n"
             f"尝试顺序示例：{priority_preview(cfg.preferred_trains, cfg.seat_types, cfg.priority_strategy, cfg.only_preferred_trains, cfg.empty_train_scope)}\n"
-            f"位置：{position_text}（无法满足时自动分配）\n"
+            f"位置：{position_text}（{fallback_text}）\n"
             f"模式：{'自动提交' if cfg.auto_submit else '仅监控'}"
         )
         answer = QMessageBox.question(

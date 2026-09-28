@@ -995,6 +995,16 @@ class BerthCountWidget(QWidget):
         total_row.addWidget(self.clear_button)
         layout.addLayout(total_row)
 
+        self.strict_checkbox = QCheckBox("仅抢所选铺位：12306 不支持所选铺位时放弃下单并结束任务")
+        self.strict_checkbox.setChecked(False)
+        self.strict_checkbox.setToolTip(
+            "开启后，下单时若 12306 未开放在线选铺或不支持中铺，程序将放弃下单并结束任务，"
+            "而不是降级为系统随机分配。注意：12306 查票不提供铺位余票，"
+            "即使开放选铺也不保证最终分到所选铺位，实际结果以订单详情为准。"
+        )
+        self.strict_checkbox.toggled.connect(lambda _checked: self.changed.emit())
+        layout.addWidget(self.strict_checkbox)
+
     def set_sleeper_available(self, available: bool) -> None:
         self.seat_type_hint.setVisible(not available)
         self.seat_type_message.setText(
@@ -1004,6 +1014,7 @@ class BerthCountWidget(QWidget):
             spin.setEnabled(available)
             self.minus_buttons[key].setEnabled(available)
             self.plus_buttons[key].setEnabled(available)
+        self.strict_checkbox.setEnabled(available)
 
     def _update_total(self) -> None:
         count = sum(spin.value() for spin in self.spins.values())
@@ -1013,6 +1024,14 @@ class BerthCountWidget(QWidget):
 
     def values(self) -> Dict[str, int]:
         return {key: spin.value() for key, spin in self.spins.items()}
+
+    def strict(self) -> bool:
+        return self.strict_checkbox.isChecked()
+
+    def set_strict(self, strict: bool) -> None:
+        self.strict_checkbox.blockSignals(True)
+        self.strict_checkbox.setChecked(bool(strict))
+        self.strict_checkbox.blockSignals(False)
 
     def set_values(self, values: Mapping[str, object]) -> None:
         for key, spin in self.spins.items():

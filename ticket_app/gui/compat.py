@@ -91,6 +91,7 @@ CONFIG_KEY_MAP: Dict[str, str] = {
     "CHOOSE_SEATS": "choose_seats",
     "SEAT_POSITION_PREFERENCES": "seat_position_preferences",
     "BERTH_PREFERENCE": "berth_preference",
+    "BERTH_PREFERENCE_STRICT": "berth_preference_strict",
     "POSITION_FALLBACK": "position_fallback",
     "PERSIST_SESSION": "persist_session",
     "PURPOSE_CODES": "purpose_codes",
@@ -132,6 +133,7 @@ DEFAULT_VALUES: Dict[str, Any] = {
     "choose_seats": "",
     "seat_position_preferences": [],
     "berth_preference": {"lower": 0, "middle": 0, "upper": 0},
+    "berth_preference_strict": False,
     "position_fallback": True,
     "persist_session": False,
     "purpose_codes": "ADULT",
@@ -163,6 +165,7 @@ EDITABLE_SETTINGS_KEYS = frozenset(
         "start_at", "stop_at", "query_interval_seconds", "max_retries",
         "pre_query_seconds", "hot_query_interval_seconds", "hot_window_seconds",
         "auto_submit", "seat_position_preferences", "berth_preference",
+        "berth_preference_strict",
         "request_timeout_seconds", "login_qr_timeout_seconds",
         "login_qr_poll_seconds", "time_sync_samples", "time_sync_max_rtt_seconds",
         "order_wait_attempts", "order_wait_interval_seconds", "station_cache_days",
@@ -404,7 +407,7 @@ def editable_settings_payload(values: Mapping[str, Any]) -> Dict[str, Any]:
         "login_qr_poll_seconds", "time_sync_max_rtt_seconds", "order_wait_interval_seconds",
     }
     integer_keys = {"max_retries", "time_sync_samples", "order_wait_attempts", "station_cache_days"}
-    boolean_keys = {"only_preferred_trains", "auto_submit", "perf_log"}
+    boolean_keys = {"only_preferred_trains", "auto_submit", "perf_log", "berth_preference_strict"}
     try:
         for key in float_keys:
             raw = payload[key]

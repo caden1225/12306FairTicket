@@ -114,6 +114,7 @@ class AppConfig:
     config_path: Path
     priority_strategy: str = "train_first"
     empty_train_scope: str | None = "all"
+    berth_preference_strict: bool = False
 
     @property
     def seat_position_preferences(self) -> SeatRelationPreference:
@@ -214,6 +215,9 @@ class AppConfig:
             config_path=config_path,
             priority_strategy=str(value("PRIORITY_STRATEGY", "train_first")),
             empty_train_scope=value("EMPTY_TRAIN_SCOPE", "all"),
+            berth_preference_strict=_as_bool(
+                value("BERTH_PREFERENCE_STRICT", False), "BERTH_PREFERENCE_STRICT"
+            ),
         )
         cfg.validate()
         return cfg
@@ -241,6 +245,7 @@ class AppConfig:
             "AUTO_SUBMIT": self.auto_submit,
             "SEAT_POSITION_PREFERENCES": list(self.seat_relation_preference.positions),
             "BERTH_PREFERENCE": dict(self.berth_preference.to_mapping()),
+            "BERTH_PREFERENCE_STRICT": self.berth_preference_strict,
             "PERSIST_SESSION": self.persist_session,
             "PURPOSE_CODES": self.purpose_codes,
             "REQUEST_TIMEOUT_SECONDS": self.request_timeout_seconds,

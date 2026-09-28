@@ -1,5 +1,6 @@
 import base64
 import logging
+import os
 import re
 import time
 import urllib.parse
@@ -10,6 +11,7 @@ import requests
 
 from .configuration import AppConfig, AppError, BASE_URL, PreparedPassengerSet, ResponseFormatError
 from .configuration import _elapsed_ms, _perf_log
+from .crypto import encrypt_password
 from .helpers import (
     _display_stock,
     _extract_js_object,
@@ -52,6 +54,13 @@ class RailwayClient:
                 "Accept": "application/json, text/javascript, */*; q=0.01",
             }
         )
+        # Device fingerprint cookies; 12306 may reject login without them.
+        # Copy from a logged-in browser (DevTools -> Application -> Cookies) if needed.
+        for name in ("RAIL_DEVICEID", "RAIL_EXPIRATION"):
+            if os.getenv(name):
+                self.session.cookies.set(name, os.environ[name], domain=".12306.cn")
+        self.session_loaded = False
+        self.username: Optional[str] = None
         self.load_cookies()
 
     def load_cookies(self) -> None:
@@ -64,6 +73,7 @@ class RailwayClient:
             jar = MozillaCookieJar(str(path))
             jar.load(ignore_discard=True, ignore_expires=True)
             self.session.cookies.update(jar)
+            self.session_loaded = True
             logging.info("已加载登录会话缓存: %s", path)
         except Exception as exc:
             logging.warning("读取登录会话缓存失败，将重新登录: %s", exc)
@@ -77,6 +87,18 @@ class RailwayClient:
         for cookie in self.session.cookies:
             jar.set_cookie(cookie)
         jar.save(ignore_discard=True, ignore_expires=True)
+        path.chmod(0o600)
+
+    def clear_session(self) -> None:
+        try:
+            self.session.get(f"{BASE_URL}/otn/login/loginOut", timeout=self.cfg.request_timeout_seconds)
+        except Exception:
+            pass
+        self.session.cookies.clear()
+        self.session_loaded = False
+        self.username = None
+        if self.cfg.persist_session and self.cfg.session_file.exists():
+            self.cfg.session_file.unlink()
 
     def check_session(self) -> bool:
         try:
@@ -91,12 +113,30 @@ class RailwayClient:
             logging.debug("检查登录状态失败: %s", exc)
             return False
 
-    def ensure_login(self) -> None:
+    def resume_session(self) -> bool:
+        """Reuse the cached session; if the otn session expired, refresh it via the passport uamtk cookie."""
         self.cancel_token.checkpoint()
         session_valid = self.check_session()
         self.cancel_token.checkpoint()
         if session_valid:
             logging.info("当前登录会话仍然有效")
+            return True
+        if not self.session_loaded:
+            return False
+        try:
+            ok, message = self._complete_login()
+        except (requests.RequestException, ValueError) as exc:
+            ok, message = False, str(exc)
+        self.cancel_token.checkpoint()
+        if not ok:
+            logging.info("缓存的登录态已失效，需要重新登录: %s", message)
+            return False
+        self.save_cookies()
+        logging.info("otn 会话已过期，已通过 uamtk 静默续期")
+        return True
+
+    def ensure_login(self) -> None:
+        if self.resume_session():
             emit_event(
                 self.event_sink,
                 "qr_status",
@@ -238,9 +278,68 @@ class RailwayClient:
             timeout=self.cfg.request_timeout_seconds,
         )
         payload = response.json()
-        if str(payload.get("result_code")) == "0":
-            return True, str(payload.get("username") or "Success")
-        return False, str(payload.get("result_message") or payload)
+        if str(payload.get("result_code")) != "0":
+            return False, str(payload.get("result_message") or payload)
+        self.cancel_token.checkpoint()
+        if not self.check_session():
+            return False, "uamauthclient 成功但 checkUser 显示未登录"
+        self.username = payload.get("username") or self.username
+        return True, str(self.username or "Success")
+
+    def check_login_verify(self, username: str) -> str:
+        """Return "none" | "sms". Raises if a slider captcha is required."""
+        self._prefetch_login_cookies()
+        response = self.session.post(
+            f"{BASE_URL}/passport/web/checkLoginVerify",
+            data={"username": username, "appid": "otn"},
+            timeout=self.cfg.request_timeout_seconds,
+        )
+        payload = response.json()
+        check = str(payload.get("login_check_code", ""))
+        if check == "0":
+            return "none"
+        if check == "3":
+            return "sms"
+        if check in ("1", "2"):
+            raise AppError("该账号当前需要滑块验证，本工具不处理滑块，请改用扫码登录")
+        raise AppError(f"未知的登录校验方式: {payload}")
+
+    def send_sms_code(self, username: str, id_last4: str) -> str:
+        response = self.session.post(
+            f"{BASE_URL}/passport/web/getMessageCode",
+            data={"appid": "otn", "username": username, "castNum": id_last4},
+            timeout=self.cfg.request_timeout_seconds,
+        )
+        payload = response.json()
+        if str(payload.get("result_code")) != "0":
+            raise AppError(f"发送短信验证码失败: {payload.get('result_message') or payload}")
+        return str(payload.get("result_message") or "短信已发送")
+
+    def login_by_password(self, username: str, password: str, sms_code: str = "") -> str:
+        """Call after check_login_verify (and send_sms_code when it returned "sms")."""
+        response = self.session.post(
+            f"{BASE_URL}/passport/web/login",
+            data={
+                "sessionId": "",
+                "sig": "",
+                "if_check_slide_passcode_token": "",
+                "scene": "",
+                "checkMode": "0" if sms_code else "",
+                "randCode": sms_code,
+                "username": username,
+                "password": encrypt_password(password),
+                "appid": "otn",
+            },
+            timeout=self.cfg.request_timeout_seconds,
+        )
+        payload = response.json()
+        if str(payload.get("result_code")) != "0":
+            raise AppError(f"登录失败: {payload.get('result_message') or payload}")
+        ok, message = self._complete_login()
+        if not ok:
+            raise AppError(f"密码登录成功但登录校验失败: {message}")
+        self.save_cookies()
+        return message
 
     def query_tickets(self, from_code: str, to_code: str) -> List[Dict[str, Any]]:
         params = {

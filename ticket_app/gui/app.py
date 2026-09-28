@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QCompleter,
     QCheckBox,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QFileDialog,
     QFrame,
@@ -58,6 +59,7 @@ from .compat import (
     cached_station_names,
     canonical_mapping,
 )
+from .login_dialog import SmsLoginDialog
 from .station_worker import StationRefreshWorker
 from .validation import validate_gui_mapping
 from .widgets import (
@@ -650,8 +652,12 @@ class MainWindow(QMainWindow):
         self.refresh_qr_button = QPushButton("重新扫码")
         self.refresh_qr_button.setEnabled(False)
         self.refresh_qr_button.clicked.connect(self._restart_for_qr)
+        self.sms_login_button = QPushButton("短信登录")
+        self.sms_login_button.setToolTip("用账号密码 + 短信验证码登录，开始任务时无需扫码")
+        self.sms_login_button.clicked.connect(self._open_sms_login)
         qr_state.addWidget(self.qr_countdown)
         qr_state.addStretch(1)
+        qr_state.addWidget(self.sms_login_button)
         qr_state.addWidget(self.refresh_qr_button)
         status_column.addLayout(qr_state)
 
@@ -1069,6 +1075,7 @@ class MainWindow(QMainWindow):
         self.offset_metric.value_label.setText("--")  # type: ignore[attr-defined]
         self.phase_badge.setText("正在启动")
         self.start_button.setEnabled(False)
+        self.sms_login_button.setEnabled(False)
         self.validate_button.setEnabled(False)
         self.stop_button.setEnabled(True)
         self.order_button.setEnabled(False)
@@ -1120,6 +1127,7 @@ class MainWindow(QMainWindow):
 
     def _on_thread_finished(self) -> None:
         self.start_button.setEnabled(True)
+        self.sms_login_button.setEnabled(True)
         self.validate_button.setEnabled(True)
         self.stop_button.setEnabled(False)
         self._set_forms_enabled(True)
@@ -1134,6 +1142,22 @@ class MainWindow(QMainWindow):
         if self._pending_restart:
             self._pending_restart = False
             QTimer.singleShot(0, self._start_task)
+
+    def _open_sms_login(self) -> None:
+        if self.thread and self.thread.isRunning():
+            return
+        timeout_widget = self.advanced.get("request_timeout_seconds")
+        timeout_seconds = float(timeout_widget.value()) if isinstance(timeout_widget, QDoubleSpinBox) else 10.0
+        dialog = SmsLoginDialog(self.shared_session, timeout_seconds, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        logging.info("短信验证码登录成功，开始任务时将直接复用该会话")
+        self._qr_deadline = 0.0
+        self.qr_image.setPixmap(QPixmap())
+        self.qr_image.setText("✓\n已登录\n无需扫码")
+        self.qr_status.setText(f"已通过短信验证码登录{('：' + dialog.username) if dialog.username else ''}")
+        self.qr_countdown.setText("会话有效")
+        self.refresh_qr_button.setEnabled(False)
 
     def _restart_for_qr(self) -> None:
         if self.thread and self.thread.isRunning():

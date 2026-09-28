@@ -986,3 +986,29 @@ def test_runtime_events_never_send_system_alerts_but_keep_dialogs(main_window, m
     assert main_window.order_button.isEnabled()
     assert dialogs == ["任务失败", "出票成功"]
     assert alerts == []
+
+
+def test_sms_login_button_marks_shared_session_ready(
+    main_window: gui_app.MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtWidgets import QDialog
+
+    opened: list[object] = []
+
+    class AcceptedDialog:
+        def __init__(self, session, timeout_seconds, parent):
+            opened.append(session)
+            self.username = "张三"
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(gui_app, "SmsLoginDialog", AcceptedDialog)
+
+    main_window.sms_login_button.click()
+
+    assert opened == [main_window.shared_session]
+    assert "无需扫码" in main_window.qr_image.text()
+    assert "张三" in main_window.qr_status.text()
+    assert main_window.qr_countdown.text() == "会话有效"
+    assert main_window._test_network_calls == []
